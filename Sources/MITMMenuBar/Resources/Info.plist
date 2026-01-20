@@ -24,7 +24,5 @@
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2024. All rights reserved.</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>MITM Menu Bar needs to control Warp terminal to launch mitmweb.</string>
 </dict>
 </plist>

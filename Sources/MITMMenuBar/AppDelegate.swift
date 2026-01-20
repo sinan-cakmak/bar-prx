@@ -1,7 +1,7 @@
 import AppKit
 import Combine
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var menu: NSMenu!
     
@@ -12,22 +12,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var webConsoleMenuItem: NSMenuItem!
     private var openWebUIMenuItem: NSMenuItem!
     
-    private var statusTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         setupMenu()
         setupBindings()
-        startStatusPolling()
         
-        // Initial status check
-        proxyManager.checkStatus()
-        mitmwebManager.checkStatus()
-    }
-    
-    func applicationWillTerminate(_ notification: Notification) {
-        statusTimer?.invalidate()
+        // Initial status check (one time only)
+        refreshStatus()
     }
     
     // MARK: - Setup
@@ -43,6 +36,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     private func setupMenu() {
         menu = NSMenu()
+        menu.delegate = self  // Get notified when menu opens
         
         // Proxy toggle
         proxyMenuItem = NSMenuItem(
@@ -108,12 +102,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
     }
     
-    private func startStatusPolling() {
-        // Poll every 2 seconds to keep status in sync
-        statusTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            self?.proxyManager.checkStatus()
-            self?.mitmwebManager.checkStatus()
-        }
+    // MARK: - NSMenuDelegate
+    
+    func menuWillOpen(_ menu: NSMenu) {
+        // Check status only when user clicks the menu icon
+        // This avoids constant polling and only checks when needed
+        refreshStatus()
+    }
+    
+    private func refreshStatus() {
+        proxyManager.checkStatus()
+        mitmwebManager.checkStatus()
     }
     
     // MARK: - Icon Updates

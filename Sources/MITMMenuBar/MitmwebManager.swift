@@ -1,19 +1,28 @@
 import Foundation
 import Combine
-import AppKit
 
 class MitmwebManager: ObservableObject {
     @Published private(set) var isRunning: Bool = false
     
-    private let mitmwebCommand = "mitmweb --ignore-hosts '.*\\.apple\\.com:443$|.*\\.icloud\\.com:443$|.*\\.mzstatic\\.com:443$'"
+    private var mitmwebProcess: Process?
+    
+    private let mitmwebArguments = [
+        "--ignore-hosts", ".*\\.apple\\.com:443$|.*\\.icloud\\.com:443$|.*\\.mzstatic\\.com:443$"
+    ]
     
     // MARK: - Public Methods
     
     func start() {
-        launchInWarp()
+        // Don't start if already running
+        if isMitmwebRunning() {
+            isRunning = true
+            return
+        }
         
-        // Check status after a delay to allow mitmweb to start
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+        launchMitmweb()
+        
+        // Check status after a short delay to allow mitmweb to start
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.checkStatus()
         }
     }
@@ -21,60 +30,67 @@ class MitmwebManager: ObservableObject {
     func stop() {
         killMitmweb()
         
-        // Update status after a short delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             self?.checkStatus()
         }
     }
     
     func checkStatus() {
-        let isRunning = isMitmwebRunning()
-        
+        let running = isMitmwebRunning()
         DispatchQueue.main.async { [weak self] in
-            self?.isRunning = isRunning
+            self?.isRunning = running
         }
     }
     
     // MARK: - Private Methods
     
-    private func launchInWarp() {
-        // Use AppleScript to launch command in Warp terminal
-        let script = """
-        tell application "Warp"
-            activate
-            delay 0.5
-        end tell
+    private func launchMitmweb() {
+        // Find mitmweb in common locations
+        let possiblePaths = [
+            "/opt/homebrew/bin/mitmweb",      // Apple Silicon Homebrew
+            "/usr/local/bin/mitmweb",          // Intel Homebrew
+            "/usr/bin/mitmweb"
+        ]
         
-        tell application "System Events"
-            tell process "Warp"
-                keystroke "n" using command down
-                delay 0.3
-                keystroke "\(mitmwebCommand)"
-                keystroke return
-            end tell
-        end tell
-        """
+        var mitmwebPath: String?
+        for path in possiblePaths {
+            if FileManager.default.fileExists(atPath: path) {
+                mitmwebPath = path
+                break
+            }
+        }
         
-        runAppleScript(script)
-    }
-    
-    private func killMitmweb() {
+        // Try using `which` as fallback
+        if mitmwebPath == nil {
+            mitmwebPath = findExecutable("mitmweb")
+        }
+        
+        guard let executablePath = mitmwebPath else {
+            print("mitmweb not found. Please install it with: brew install mitmproxy")
+            return
+        }
+        
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        process.arguments = ["-f", "mitmweb"]
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = mitmwebArguments
+        
+        // Redirect output to /dev/null to avoid blocking
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
         
         do {
             try process.run()
-            process.waitUntilExit()
+            mitmwebProcess = process
+            print("mitmweb started with PID: \(process.processIdentifier)")
         } catch {
-            print("Failed to kill mitmweb: \(error)")
+            print("Failed to start mitmweb: \(error)")
         }
     }
     
-    private func isMitmwebRunning() -> Bool {
+    private func findExecutable(_ name: String) -> String? {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        process.arguments = ["-x", "mitmweb"]
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        process.arguments = [name]
         
         let outputPipe = Pipe()
         process.standardOutput = outputPipe
@@ -84,45 +100,56 @@ class MitmwebManager: ObservableObject {
             try process.run()
             process.waitUntilExit()
             
-            // pgrep returns 0 if a process is found
-            return process.terminationStatus == 0
-        } catch {
-            print("Failed to check mitmweb status: \(error)")
-            return false
-        }
-    }
-    
-    private func runAppleScript(_ script: String) {
-        var error: NSDictionary?
-        if let scriptObject = NSAppleScript(source: script) {
-            scriptObject.executeAndReturnError(&error)
-            
-            if let error = error {
-                print("AppleScript error: \(error)")
-                
-                // Fallback: try using osascript directly
-                fallbackLaunchInWarp()
+            if process.terminationStatus == 0 {
+                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                if let path = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !path.isEmpty {
+                    return path
+                }
             }
+        } catch {
+            // Ignore
         }
+        return nil
     }
     
-    private func fallbackLaunchInWarp() {
-        // Alternative approach using osascript
+    private func killMitmweb() {
+        // First try to terminate our tracked process
+        if let process = mitmwebProcess, process.isRunning {
+            process.terminate()
+            mitmwebProcess = nil
+        }
+        
+        // Also kill any other mitmweb processes
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = [
-            "-e", "tell application \"Warp\" to activate",
-            "-e", "delay 0.5",
-            "-e", "tell application \"System Events\" to tell process \"Warp\" to keystroke \"n\" using command down",
-            "-e", "delay 0.3",
-            "-e", "tell application \"System Events\" to tell process \"Warp\" to keystroke \"\(mitmwebCommand)\"",
-            "-e", "tell application \"System Events\" to tell process \"Warp\" to keystroke return"
-        ]
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        process.arguments = ["-f", "mitmweb"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
         
         do {
             try process.run()
+            process.waitUntilExit()
         } catch {
-            print("Failed to launch Warp with fallback: \(error)")
+            // Ignore errors - process might not exist
+        }
+    }
+    
+    private func isMitmwebRunning() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-f", "mitmweb"]
+        
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = FileHandle.nullDevice
+        
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
         }
     }
 }
