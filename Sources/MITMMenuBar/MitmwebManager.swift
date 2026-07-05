@@ -5,10 +5,18 @@ class MitmwebManager: ObservableObject {
     @Published private(set) var isRunning: Bool = false
     
     private var mitmwebProcess: Process?
-    
-    private let mitmwebArguments = [
-        "--ignore-hosts", ".*\\.apple\\.com:443$|.*\\.icloud\\.com:443$|.*\\.mzstatic\\.com:443$"
-    ]
+
+    /// Base args plus the response-override addon (when its script exists).
+    private var mitmwebArguments: [String] {
+        var args = [
+            "--ignore-hosts", ".*\\.apple\\.com:443$|.*\\.icloud\\.com:443$|.*\\.mzstatic\\.com:443$"
+        ]
+        let scriptPath = OverridePaths.script.path
+        if FileManager.default.fileExists(atPath: scriptPath) {
+            args += ["-s", scriptPath]
+        }
+        return args
+    }
     
     // MARK: - Public Methods
     

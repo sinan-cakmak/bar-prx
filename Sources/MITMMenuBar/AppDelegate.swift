@@ -7,7 +7,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     
     private let proxyManager = ProxyManager()
     private let mitmwebManager = MitmwebManager()
-    
+    private let overridesStore = OverridesStore()
+    private var overridesWindowController: OverridesWindowController?
+
     private var proxyMenuItem: NSMenuItem!
     private var webConsoleMenuItem: NSMenuItem!
     private var openWebUIMenuItem: NSMenuItem!
@@ -66,9 +68,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
         openWebUIMenuItem.target = self
         menu.addItem(openWebUIMenuItem)
-        
+
+        // Response overrides
+        let overridesMenuItem = NSMenuItem(
+            title: "Response Overrides…",
+            action: #selector(openOverrides),
+            keyEquivalent: "r"
+        )
+        overridesMenuItem.target = self
+        menu.addItem(overridesMenuItem)
+
         menu.addItem(NSMenuItem.separator())
-        
+
         // Quit
         let quitMenuItem = NSMenuItem(
             title: "Quit",
@@ -169,6 +180,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     
+    @objc private func openOverrides() {
+        if overridesWindowController == nil {
+            overridesWindowController = OverridesWindowController(store: overridesStore)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        overridesWindowController?.showWindow(nil)
+        overridesWindowController?.window?.makeKeyAndOrderFront(nil)
+    }
+
     @objc private func openWebUI() {
         if let url = URL(string: "http://127.0.0.1:8081") {
             NSWorkspace.shared.open(url)

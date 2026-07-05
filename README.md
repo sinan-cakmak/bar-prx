@@ -6,7 +6,8 @@ A macOS menu bar app for controlling mitmproxy's system proxy and web console.
 
 - **Menu bar icon** with SF Symbols showing proxy status
 - **Toggle system proxy** on/off (HTTP and HTTPS)
-- **Launch mitmweb** console in Warp terminal
+- **Launch mitmweb** console as a background process
+- **Response overrides** — mock any endpoint by returning custom JSON (great for React Native / API development); matching requests are short-circuited and never hit the real server
 - **Visual indicators**:
   - Gray network slash: Both off
   - Blue network: Proxy on
@@ -17,7 +18,6 @@ A macOS menu bar app for controlling mitmproxy's system proxy and web console.
 
 - macOS 13.0 or later
 - Xcode Command Line Tools (for building)
-- [Warp Terminal](https://www.warp.dev/) (for web console)
 - [mitmproxy](https://mitmproxy.org/) installed (`brew install mitmproxy`)
 
 ## Build
@@ -93,15 +93,41 @@ The app may request the following permissions:
 
 1. Click the network icon in the menu bar
 2. **Proxy Enabled** - Toggle to turn system proxy on/off
-3. **Web Console** - Toggle to launch/stop mitmweb in Warp
+3. **Web Console** - Toggle to launch/stop mitmweb
 4. **Open mitmproxy Web UI** - Opens http://127.0.0.1:8081 in browser (only active when web console is running)
-5. **Quit** - Exit the app
+5. **Response Overrides…** - Open the editor to mock endpoints (see below)
+6. **Quit** - Exit the app
+
+## Response Overrides
+
+Mock API responses without touching your backend — ideal when developing a
+React Native app against endpoints you don't control yet.
+
+1. Open **Response Overrides…** (`Cmd+R`) from the menu.
+2. Click **+** to add a rule and fill in:
+   - **Endpoint** — a substring matched against the full request URL (e.g. `/api/users`)
+   - **Method** — `ANY` or a specific verb (GET, POST, …)
+   - **Status code** — defaults to `200`
+   - **Response body (JSON)** — the custom payload returned to the client
+3. Make sure **Web Console** is running.
+
+When a request matches an enabled rule, mitmproxy short-circuits it and returns
+your custom JSON — the real server is never contacted. Edits apply **live**; you
+don't need to restart the web console.
+
+Rules are stored in `~/.mitmmenubar/overrides.json`, loaded by an addon script
+(`~/.mitmmenubar/response_override.py`) that the app writes on launch and passes
+to mitmweb via `-s`.
+
+> **HTTPS note:** For `https://` endpoints (most APIs), the client/simulator must
+> trust mitmproxy's CA certificate. See the [mitmproxy certificate docs](https://docs.mitmproxy.org/stable/concepts-certificates/).
 
 ## Keyboard Shortcuts
 
 - `Cmd+P` - Toggle proxy
 - `Cmd+W` - Toggle web console
 - `Cmd+O` - Open web UI
+- `Cmd+R` - Open Response Overrides
 - `Cmd+Q` - Quit
 
 ## Configuration
@@ -123,13 +149,15 @@ To modify these, edit the respective manager files:
 - Check System Settings > Network > Wi-Fi > Details > Proxies
 
 ### Web console not launching
-- Ensure Warp is installed
-- Grant Accessibility permissions to the app
 - Verify mitmproxy is installed: `which mitmweb`
 
+### Overrides not applying
+- Make sure the **Web Console** is running (overrides only work while mitmweb runs)
+- Check that the endpoint substring actually appears in the request URL
+- Confirm the rule is enabled and its JSON body is valid
+
 ### Icon not updating
-- The app polls status every 2 seconds
-- Click the icon to force a visual update
+- Status refreshes when you open the menu — click the icon to force a refresh
 
 ## Auto-Start on Login
 
