@@ -3,12 +3,26 @@ import Combine
 
 class MitmwebManager: ObservableObject {
     @Published private(set) var isRunning: Bool = false
-    
+
+    /// Web UI port (mitmweb's `--web-port`), persisted across launches.
+    @Published var webPort: Int {
+        didSet { UserDefaults.standard.set(webPort, forKey: Self.webPortKey) }
+    }
+
+    private static let webPortKey = "webPort"
+    static let defaultWebPort = 8081
+
     private var mitmwebProcess: Process?
 
-    /// Base args plus the response-override addon (when its script exists).
+    init() {
+        let saved = UserDefaults.standard.integer(forKey: Self.webPortKey)
+        webPort = saved == 0 ? Self.defaultWebPort : saved
+    }
+
+    /// Base args plus the web-UI port and the response-override addon.
     private var mitmwebArguments: [String] {
         var args = [
+            "--web-port", String(webPort),
             "--ignore-hosts", ".*\\.apple\\.com:443$|.*\\.icloud\\.com:443$|.*\\.mzstatic\\.com:443$"
         ]
         let scriptPath = OverridePaths.script.path
@@ -16,6 +30,16 @@ class MitmwebManager: ObservableObject {
             args += ["-s", scriptPath]
         }
         return args
+    }
+
+    /// Apply a changed port. Restarts mitmweb if it's currently running so the
+    /// live instance and the "Open Web UI" link stay in sync.
+    func applyPortChange() {
+        guard isRunning else { return }
+        stop()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.start()
+        }
     }
     
     // MARK: - Public Methods

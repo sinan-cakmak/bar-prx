@@ -7,7 +7,7 @@ class ProxyManager: ObservableObject {
     private let proxyHost = "127.0.0.1"
     private let proxyPort = "8080"
     private let networkService = "Wi-Fi"
-    
+
     // MARK: - Public Methods
     
     func enable() {

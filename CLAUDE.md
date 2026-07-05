@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-A macOS menu bar app (SwiftPM executable, no Xcode project) that controls mitmproxy: toggling the system HTTP/HTTPS proxy and starting/stopping the `mitmweb` console. It runs as an `LSUIElement` accessory app (no dock icon), driven entirely from the status bar menu.
+A macOS menu bar app (SwiftPM executable, no Xcode project) that controls mitmproxy: toggling the system HTTP/HTTPS proxy, starting/stopping the `mitmweb` console, mocking API endpoints (response overrides), and a dev CORS bypass. It runs as an `LSUIElement` accessory app (no dock icon), and the **entire UI is a single `MenuBarExtra(.window)` popup** — there are no other windows.
 
 ## Commands
 
@@ -28,23 +28,27 @@ To run mitmproxy features locally you need `brew install mitmproxy`. The proxy t
 
 ## Architecture
 
-Three source files under `Sources/MITMMenuBar/`, wired together by `AppDelegate`:
+Swift files under `Sources/MITMMenuBar/`. This is a **SwiftUI `App`-lifecycle** app (not AppKit/`AppDelegate` — that was removed):
 
-- **`MITMMenuBarApp.swift`** — `@main` entry point. Manually constructs `NSApplication`, sets `.accessory` activation policy, installs `AppDelegate`.
-- **`AppDelegate.swift`** — owns the `NSStatusItem`, menu, and both managers. Subscribes to the managers' `@Published` state via Combine (`setupBindings`) and re-renders the menu-bar icon (`updateStatusIcon`) whenever either changes. The icon is an SF Symbol tinted per state — the four (proxyOn, webConsoleOn) combinations map to distinct symbol+color pairs. `NSImage.tinted(with:)` extension does the coloring (sets `isTemplate = false` so the tint survives).
-- **`ProxyManager.swift`** — `ObservableObject` wrapping `networksetup`. `enable()`/`disable()` set HTTP + HTTPS proxy; `checkStatus()` parses `-getwebproxy` output and only reports enabled when the configured host+port (`127.0.0.1:8080`) match, so it ignores unrelated proxies.
-- **`MitmwebManager.swift`** — `ObservableObject` managing the `mitmweb` process. `start()` searches known Homebrew paths then falls back to `which`. Status detection uses `pgrep -f mitmweb` and stop uses `pkill -f mitmweb`, so it manages *any* mitmweb instance, not just the one it launched.
+- **`MITMMenuBarApp.swift`** — `@main struct ... : App`. One `MenuBarExtra { MenuContentView } label: { StatusLabel }` scene with `.menuBarExtraStyle(.window)`. Owns the three managers as `@StateObject`. `StatusLabel` renders the menu-bar icon: the menu bar forces monochrome *template* rendering, so to show **color** it builds a pre-tinted **non-template** `NSImage` (`lockFocus` + `sourceAtop` fill, `isTemplate = false`) via `Image(nsImage:)`. It also seeds an initial status check in a `.task`.
+- **`MenuContentView.swift`** — the whole popup UI. Proxy/console toggles, "Turn Everything On/Off", console-port field, "Open Web UI", "Bypass CORS" toggle, and the inline override list (`RuleRow` = a `DisclosureGroup`; the JSON `TextEditor` is drag-resizable via a corner grip + `DragGesture`). Persists edits with `.onChange(of:)` → `overrides.save()`.
+- **`OverridesStore.swift`** — `ObservableObject` owning override rules + `corsBypass`, persisted to `~/.mitmmenubar/overrides.json`. Also holds `OverridePaths`, the `OverrideRule` model, and the **embedded Python addon** (`addonScript`) written to `~/.mitmmenubar/response_override.py` on launch.
+- **`ProxyManager.swift`** — `ObservableObject` wrapping `networksetup`. `enable()`/`disable()` set HTTP + HTTPS proxy; `checkStatus()` parses `-getwebproxy` and only reports enabled when host+port (`127.0.0.1:8080`) match, ignoring unrelated proxies.
+- **`MitmwebManager.swift`** — `ObservableObject` managing the `mitmweb` process. `start()` searches Homebrew paths then falls back to `which`; status via `pgrep -f mitmweb`, stop via `pkill -f mitmweb` (manages *any* mitmweb instance). `webPort` is persisted via `UserDefaults` and passed as `--web-port`; `applyPortChange()` restarts mitmweb if running.
 
-### State model
-There is no continuous polling. Status is refreshed only on `applicationDidFinishLaunching` and via `menuWillOpen` (the `NSMenuDelegate` callback) when the user opens the menu. After a toggle, managers re-check status on a short `asyncAfter` delay to let the system settle. All `@Published` mutations are marshaled to the main queue.
+### The mitmproxy addon (`OverridesStore.addonScript`)
+The Swift app and a Python addon share `~/.mitmmenubar/overrides.json`. The addon re-reads that file (mtime-cached) on each request, so **rule/CORS edits apply live without restarting mitmweb** — only changes to the addon *code* need a console restart (mitmproxy hot-reloads `-s` scripts on file change, which the app rewrites at launch). The addon: short-circuits matching requests in the `request` hook (upstream never contacted), answers CORS preflight `OPTIONS`, always adds CORS headers to mocks, and — when `corsBypass` is on — injects CORS headers into all passed-through responses in the `response` hook. Origin is reflected (not `*`) so credentialed requests work.
 
-### Hardcoded configuration
-Settings are constants in the manager files, not user-configurable at runtime:
-- `ProxyManager`: `proxyHost = 127.0.0.1`, `proxyPort = 8080`, `networkService = "Wi-Fi"` (proxy toggling only affects the Wi-Fi interface).
-- `MitmwebManager`: `mitmwebArguments` passes `--ignore-hosts` for Apple/iCloud/mzstatic domains.
-- `openWebUI` opens `http://127.0.0.1:8081` (mitmweb's default web UI port).
+### Gotchas
+- **Don't mutate `@Published` from a manager's `init()`.** Seeding status there (which dispatches `@Published` writes) crashes SwiftUI's AttributeGraph at launch. Initial status is seeded from `StatusLabel`'s `.task` instead.
+- **Proxy/console are coupled** in `MenuContentView`: enabling the proxy also starts the console; stopping the console disables the proxy. This makes the `(proxy on, console off)` state — which black-holes all traffic ("no internet") — unreachable. That state shows a red warning icon if reached externally.
+- No continuous polling: status refreshes on popup open (`.onAppear`, which also calls `NSApp.activate` so text fields accept paste) and after toggles (`asyncAfter`). All `@Published` mutations are marshaled to the main queue.
+
+### Configuration
+- **In-app:** console web-UI port (`MitmwebManager.webPort`, `UserDefaults`).
+- **Hardcoded:** proxy host/port/interface (`127.0.0.1:8080`, `Wi-Fi`) in `ProxyManager`; `--ignore-hosts` list in `MitmwebManager`.
 
 ## Notes
 
-- The README's "launch mitmweb in Warp terminal" / Accessibility-permission sections are **stale**: the current code launches `mitmweb` directly as a subprocess (output to `/dev/null`) and does not send keystrokes to Warp. Prefer the code over the README when they disagree.
-- `Package.swift` excludes `Resources/Info.plist` from the build; `build.sh` copies it into the `.app` bundle. Bundle identifier is `com.local.MITMMenuBar`.
+- `Package.swift` excludes `Resources/Info.plist` from the build; `build.sh` copies it into the `.app` bundle. `LSUIElement = true` in Info.plist is what makes it an accessory (no dock icon) under the SwiftUI lifecycle. Bundle identifier is `com.local.MITMMenuBar`.
+- Info.plist still carries a stale `NSAppleEventsUsageDescription` about controlling Warp; the app no longer uses AppleEvents/Warp.
