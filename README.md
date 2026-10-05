@@ -2,14 +2,17 @@
 
 A macOS menu bar app for controlling mitmproxy's system proxy and web console.
 
-Everything lives in a single menu bar popup — there are no extra windows.
+Everything lives in a single menu bar popup. Settings and rules scroll while the
+app status and main controls stay visible. Endpoint rows show the path, host,
+method, status, and any configured delay; click a row to edit it.
 
 ## Features
 
 - **Toggle system proxy** on/off (HTTP and HTTPS)
 - **Launch mitmweb** console as a background process, on a **configurable web port**
-- **One-click "Turn Everything On/Off"** — enables the proxy and console together
+- **One-click "Start all / Stop all"** — enables the proxy and console together
 - **Response overrides** — mock any endpoint by returning custom JSON (great for React Native / API development); matching requests are short-circuited and never hit the real server. The response editor is **drag-resizable**
+- **Response delays** — add a per-endpoint delay in seconds to mocked or real server responses, without holding up unrelated requests
 - **CORS bypass (dev)** — inject `Access-Control-Allow-*` headers and answer preflight requests so a browser dev client can call APIs that don't allow its origin
 - **Menu bar icon** whose color reflects state:
   - Gray `network.slash`: both off
@@ -36,27 +39,16 @@ swift build -c release
 # .build/release/MITMMenuBar
 ```
 
-### Create an App Bundle (Optional)
-
-To create a proper `.app` bundle that can be added to your Applications folder:
+### Build and install the app
 
 ```bash
-# Build release
-swift build -c release
-
-# Create app bundle structure
-mkdir -p MITMMenuBar.app/Contents/MacOS
-mkdir -p MITMMenuBar.app/Contents/Resources
-
-# Copy binary
-cp .build/release/MITMMenuBar MITMMenuBar.app/Contents/MacOS/
-
-# Copy Info.plist
-cp Sources/MITMMenuBar/Resources/Info.plist MITMMenuBar.app/Contents/
-
-# Move to Applications (optional)
-mv MITMMenuBar.app /Applications/
+./build.sh
 ```
+
+This builds the release app with its icon and installs it directly to
+`/Applications/MITMMenuBar.app`. Future runs update that same copy; the script
+stages the bundle in a temporary directory instead of leaving a second app in the
+project folder. The app's saved rules and settings are retained.
 
 ### Using Xcode
 
@@ -77,10 +69,10 @@ mv MITMMenuBar.app /Applications/
 
 ### From App Bundle
 
-Double-click `MITMMenuBar.app` or:
+Open **MITM Menu Bar** from Applications, or:
 
 ```bash
-open MITMMenuBar.app
+open /Applications/MITMMenuBar.app
 ```
 
 ## Permissions
@@ -92,15 +84,15 @@ time the proxy is toggled.
 
 Click the menu bar icon to open the popup:
 
-- **Turn Everything On/Off** — enable the proxy and start the console in one click
-- **Proxy Enabled** — toggle the system proxy. Enabling it also starts the console
+- **Start all / Stop all** — enable the proxy and start the console in one click
+- **System proxy** — toggle the system proxy. Enabling it also starts the console
   (the proxy points traffic at the console, so it must be running); stopping the
   console turns the proxy back off
 - **Web Console** — start/stop mitmweb
 - **Console port** — the mitmweb web UI port (default `8081`); persisted across
   launches. Changing it while running restarts the console
-- **Open mitmproxy Web UI** — opens `http://127.0.0.1:<port>` (enabled while running)
-- **Bypass CORS (dev)** — see [CORS bypass](#cors-bypass) below
+- **Open console** — opens `http://127.0.0.1:<port>` (enabled while running)
+- **Bypass CORS** — see [CORS bypass](#cors-bypass) below
 - **Response Overrides** — mock endpoints inline (see below)
 - **Quit**
 
@@ -113,18 +105,31 @@ React Native app against endpoints you don't control yet.
 
 In the **Response Overrides** section of the popup:
 
-1. Click **+** to add a rule, then expand it and fill in:
+1. Click **Add rule** to open a new rule and fill in:
    - **Endpoint** — a substring matched against the full request URL (e.g. `/api/users`)
    - **Method** — `ANY` or a specific verb (GET, POST, …)
-   - **Status code** — defaults to `200`
+   - **Response delay** — extra time before returning the response; defaults to `0`
+     (no delay). Decimals such as `0.5` are supported
+   - **Override response** — on by default. Turn off to delay the real server's
+     response without replacing its status, headers, or body
+   - **Status code** — defaults to `200`; available when overriding the response
    - **Response body (JSON)** — the custom payload returned to the client. Drag the
      bottom-right grip to resize the editor
 2. Make sure the **Web Console** is running.
 
 Editing an endpoint/status field and pressing **Enter** commits it. When a request
-matches an enabled rule, mitmproxy short-circuits it and returns your custom JSON —
+matches an enabled rule with **Override response** on, mitmproxy short-circuits it and returns your custom JSON —
 the real server is never contacted. Mocked responses include CORS headers so they
 also work from a browser. Edits apply **live**; no need to restart the console.
+
+To delay an endpoint by **5 seconds** without mocking it, add a rule with that
+endpoint, set **Response delay** to `5`, and turn **Override response** off.
+The real server is contacted normally, then the proxy waits 5 extra seconds before
+delivering its response. Keep the toggle on to apply the same delay to a mocked response.
+The first enabled matching rule wins; delays from overlapping rules are not added.
+CORS preflight (`OPTIONS`) requests are not delayed. The delay also applies before
+headers or body data are delivered when response streaming is enabled.
+Existing saved rules retain their mocked responses with no delay.
 
 Rules are stored in `~/.mitmmenubar/overrides.json`, loaded by an addon script
 (`~/.mitmmenubar/response_override.py`) that the app writes on launch and passes
@@ -137,7 +142,7 @@ When developing React Native **on web**, calls to an API that doesn't whitelist
 your dev origin fail with a CORS error (native builds have no CORS check, so the
 same call works on device).
 
-Enable **Bypass CORS (dev)** and the addon will:
+Enable **Bypass CORS** and the addon will:
 
 - answer preflight `OPTIONS` requests with `204` + CORS headers, and
 - inject `Access-Control-Allow-Origin` (reflecting the request's `Origin`),
@@ -162,6 +167,10 @@ Hardcoded (edit the source to change):
   `Sources/MITMMenuBar/ProxyManager.swift`
 - mitmweb launch args (`--ignore-hosts`, addon) — `Sources/MITMMenuBar/MitmwebManager.swift`
 
+Apple/iCloud and WhatsApp media hosts bypass TLS inspection so those apps keep
+working while the proxy is enabled. Their encrypted traffic will not appear in
+mitmweb and cannot be targeted by response overrides.
+
 ## Troubleshooting
 
 ### Proxy not toggling
@@ -177,13 +186,18 @@ Hardcoded (edit the source to change):
 - Confirm the rule is enabled and its JSON body is valid
 
 ### CORS still failing
-- Confirm **Bypass CORS (dev)** is on and the **Web Console** is running
+- Confirm **Bypass CORS** is on and the **Web Console** is running
 - For `https://` APIs, the mitmproxy CA cert must be trusted in the browser (visit [mitm.it](http://mitm.it) with the proxy on)
 - Make sure the browser's traffic actually goes through the system proxy
 
 ### "No internet" while the proxy is on
 - The proxy needs the console (mitmweb) listening. The app couples them so this
   shouldn't happen; if the icon is a **red triangle**, toggle everything off
+
+### iCloud or WhatsApp media does not load
+- Restart the Web Console after updating the app so the current bypass list is
+  applied. iCloud and WhatsApp media connections are passed through without TLS
+  inspection because those clients reject intercepted certificates.
 
 ### Icon not updating
 - Status refreshes when you open the popup — there is no background polling

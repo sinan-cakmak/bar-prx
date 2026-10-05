@@ -10,7 +10,11 @@ let package = Package(
         .executableTarget(
             name: "MITMMenuBar",
             path: "Sources/MITMMenuBar",
-            exclude: ["Resources/Info.plist"]
+            exclude: ["Resources"]
+        ),
+        .testTarget(
+            name: "MITMMenuBarTests",
+            dependencies: ["MITMMenuBar"]
         )
     ]
 )

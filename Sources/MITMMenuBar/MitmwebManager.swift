@@ -20,10 +20,12 @@ class MitmwebManager: ObservableObject {
     }
 
     /// Base args plus the web-UI port and the response-override addon.
-    private var mitmwebArguments: [String] {
+    /// Internal so regression tests can verify the exact pattern passed to
+    /// mitmweb, rather than testing a disconnected copy of the bypass list.
+    var mitmwebArguments: [String] {
         var args = [
             "--web-port", String(webPort),
-            "--ignore-hosts", ".*\\.apple\\.com:443$|.*\\.icloud\\.com:443$|.*\\.mzstatic\\.com:443$"
+            "--ignore-hosts", ProxyBypass.httpsHostPattern
         ]
         let scriptPath = OverridePaths.script.path
         if FileManager.default.fileExists(atPath: scriptPath) {
